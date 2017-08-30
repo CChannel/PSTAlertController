@@ -63,7 +63,7 @@
 
 @end
 
-@interface PSTAlertController () <UIActionSheetDelegate, UIAlertViewDelegate> {
+@interface PSTAlertController () {
     struct {
         unsigned int isShowingAlert:1;
     } _flags;
@@ -81,9 +81,6 @@
 
 // iOS 7
 @property (nonatomic, copy) NSArray *actions;
-@property (nonatomic, copy) NSArray *textFieldHandlers;
-@property (nonatomic, strong, readonly) UIActionSheet *actionSheet;
-@property (nonatomic, strong, readonly) UIAlertView *alertView;
 
 // Storage for actionSheet/alertView
 @property (nonatomic, strong) UIView *strongSheetStorage;
@@ -115,18 +112,6 @@
 
         if ([self alertControllerAvailable]) {
             _alertController = [PSTExtendedAlertController alertControllerWithTitle:title message:message preferredStyle:(UIAlertControllerStyle)preferredStyle];
-        } else {
-#if __IPHONE_OS_VERSION_MIN_REQUIRED < 80000
-            if (preferredStyle == PSTAlertControllerStyleActionSheet) {
-                NSString *titleAndMessage = title;
-                if (title && message) {
-                    titleAndMessage = [NSString stringWithFormat:@"%@\n%@", title, message];
-                }
-                _strongSheetStorage = [[UIActionSheet alloc] initWithTitle:titleAndMessage delegate:self cancelButtonTitle:nil destructiveButtonTitle:nil otherButtonTitles:nil];
-            } else {
-                _strongSheetStorage = [[UIAlertView alloc] initWithTitle:title message:message delegate:self cancelButtonTitle:nil otherButtonTitles:nil];
-            }
-#endif
         }
     }
     return self;
@@ -169,17 +154,6 @@
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////
-#pragma mark - Accessors
-
-- (UIAlertView *)alertView {
-    return (UIAlertView *)(self.strongSheetStorage ?: self.weakSheetStorage);
-}
-
-- (UIActionSheet *)actionSheet {
-    return (UIActionSheet *)(self.strongSheetStorage ?: self.weakSheetStorage);
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////
 #pragma mark - Adding Actions
 
 - (void)addAction:(PSTAlertAction *)action {
@@ -196,23 +170,6 @@
             [action performAction];
         }];
         [self.alertController addAction:alertAction];
-    } else {
-        if (self.preferredStyle == PSTAlertControllerStyleActionSheet) {
-            NSUInteger currentButtonIndex = [self.actionSheet addButtonWithTitle:action.title];
-
-            if (action.style == PSTAlertActionStyleDestructive) {
-                self.actionSheet.destructiveButtonIndex = currentButtonIndex;
-            } else if (action.style == PSTAlertActionStyleCancel) {
-                self.actionSheet.cancelButtonIndex = currentButtonIndex;
-            }
-        } else {
-            NSUInteger currentButtonIndex = [self.alertView addButtonWithTitle:action.title];
-
-            // UIAlertView doesn't support destructive buttons.
-            if (action.style == PSTAlertActionStyleCancel) {
-                self.alertView.cancelButtonIndex = currentButtonIndex;
-            }
-        }
     }
 }
 
@@ -222,26 +179,12 @@
 - (void)addTextFieldWithConfigurationHandler:(void (^)(UITextField *textField))configurationHandler {
     if ([self alertControllerAvailable]) {
         [self.alertController addTextFieldWithConfigurationHandler:configurationHandler];
-    } else {
-        NSAssert(self.preferredStyle == PSTAlertControllerStyleAlert, @"Text fields are only supported for alerts.");
-        self.textFieldHandlers = [[NSArray arrayWithArray:self.textFieldHandlers] arrayByAddingObject:configurationHandler ?: ^(UITextField *textField){}];
-        self.alertView.alertViewStyle = self.textFieldHandlers.count > 1 ? UIAlertViewStyleLoginAndPasswordInput : UIAlertViewStylePlainTextInput;
     }
 }
 
 - (NSArray *)textFields {
     if ([self alertControllerAvailable]) {
         return self.alertController.textFields;
-    } else if (self.preferredStyle == PSTAlertControllerStyleAlert) {
-        switch (self.alertView.alertViewStyle) {
-            case UIAlertViewStyleSecureTextInput:
-            case UIAlertViewStylePlainTextInput:
-                return @[[self.alertView textFieldAtIndex:0]];
-            case UIAlertViewStyleLoginAndPasswordInput:
-                return @[[self.alertView textFieldAtIndex:0], [self.alertView textFieldAtIndex:1]];
-            case UIAlertViewStyleDefault:
-                return @[];
-        }
     }
     // UIActionSheet doesn't support text fields.
     return nil;
@@ -260,15 +203,7 @@ static NSUInteger PSTVisibleAlertsCount = 0;
 }
 
 - (BOOL)isVisible {
-    if ([self alertControllerAvailable]) {
-        return self.alertController.view.window != nil;
-    } else {
-        if (self.preferredStyle == PSTAlertControllerStyleActionSheet) {
-            return self.actionSheet.isVisible;
-        } else {
-            return self.alertView.isVisible;
-        }
-    }
+    return self.alertController.view.window != nil;
 }
 
 - (void)showWithSender:(id)sender controller:(UIViewController *)controller animated:(BOOL)animated completion:(void (^)(void))completion {
@@ -356,20 +291,6 @@ static NSUInteger PSTVisibleAlertsCount = 0;
             objc_setAssociatedObject(controller, _cmd, self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }];
 
-    } else {
-        if (self.preferredStyle == PSTAlertControllerStyleActionSheet) {
-            [self showActionSheetWithSender:sender fallbackView:controller.view animated:animated];
-            [self moveSheetToWeakStorage];
-        } else {
-            // Call text field configuration handlers.
-            [self.textFieldHandlers enumerateObjectsUsingBlock:^(void (^configurationHandler)(UITextField *textField), NSUInteger idx, BOOL *stop) {
-                configurationHandler([self.alertView textFieldAtIndex:idx]);
-            }];
-            [self.alertView show];
-            [self moveSheetToWeakStorage];
-        }
-        // This is called before the animation is complete, but at least it's called.
-        if (completion) completion();
     }
     [self setIsShowingAlert:YES];
 }
@@ -385,54 +306,14 @@ static NSUInteger PSTVisibleAlertsCount = 0;
     }
 }
 
-- (void)showActionSheetWithSender:(id)sender fallbackView:(UIView *)view animated:(BOOL)animated {
-    UIActionSheet *actionSheet = self.actionSheet;
-    BOOL isIPad = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad;
-    if (isIPad && [sender isKindOfClass:UIBarButtonItem.class]) {
-        [actionSheet showFromBarButtonItem:sender animated:animated];
-    } else if ([sender isKindOfClass:UIToolbar.class]) {
-        [actionSheet showFromToolbar:sender];
-    } else if ([sender isKindOfClass:UITabBar.class]) {
-        [actionSheet showFromTabBar:sender];
-    } else if ([view isKindOfClass:UIToolbar.class]) {
-        [actionSheet showFromToolbar:(UIToolbar *)view];
-    } else if ([view isKindOfClass:UITabBar.class]) {
-        [actionSheet showFromTabBar:(UITabBar *)view];
-    } else if (isIPad && [sender isKindOfClass:UIView.class]) {
-        [actionSheet showFromRect:[sender bounds] inView:sender animated:animated];
-    } else if ([sender isKindOfClass:NSValue.class]) {
-        [actionSheet showFromRect:[sender CGRectValue] inView:view animated:animated];
-    } else {
-        [actionSheet showInView:view];
-    }
-}
-
 - (void)dismissAnimated:(BOOL)animated completion:(void (^)(void))completion {
     if ([self alertControllerAvailable]) {
         [self.alertController dismissViewControllerAnimated:animated completion:completion];
-    } else {
-        // Make sure the completion block is called.
-        if (completion) {
-            [self addDidDismissBlock:^(PSTAlertAction *action) { completion(); }];
-        }
-        if (self.preferredStyle == PSTAlertControllerStyleActionSheet) {
-            [self.actionSheet dismissWithClickedButtonIndex:self.actionSheet.cancelButtonIndex animated:animated];
-        } else {
-            [self.alertView dismissWithClickedButtonIndex:self.alertView.cancelButtonIndex animated:animated];
-        }
     }
 }
 
 - (id)presentedObject {
-    if ([self alertControllerAvailable]) {
-        return self.alertController;
-    } else {
-        if (self.preferredStyle == PSTAlertControllerStyleActionSheet) {
-            return self.actionSheet;
-        } else {
-            return self.alertView;
-        }
-    }
+    return self.alertController;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -491,29 +372,6 @@ static NSUInteger PSTVisibleAlertsCount = 0;
     [action performAction];
 
     [self performBlocks:PROPERTY(didDismissBlocks) withAction:action];
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////
-#pragma mark - UIActionSheetDelegate
-
-- (void)actionSheet:(UIActionSheet *)actionSheet willDismissWithButtonIndex:(NSInteger)buttonIndex {
-    [self viewWillDismissWithButtonIndex:buttonIndex];
-}
-
-// Called when a button is clicked. The view will be automatically dismissed after this call returns.
-- (void)actionSheet:(UIActionSheet *)actionSheet didDismissWithButtonIndex:(NSInteger)buttonIndex {
-    [self viewDidDismissWithButtonIndex:buttonIndex];
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////
-#pragma mark - UIAlertViewDelegate
-
-- (void)alertView:(UIAlertView *)alertView willDismissWithButtonIndex:(NSInteger)buttonIndex {
-    [self viewWillDismissWithButtonIndex:buttonIndex];
-}
-
-- (void)alertView:(UIAlertView *)alertView didDismissWithButtonIndex:(NSInteger)buttonIndex {
-    [self viewDidDismissWithButtonIndex:buttonIndex];
 }
 
 @end
