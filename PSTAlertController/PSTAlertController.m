@@ -92,10 +92,6 @@
 ///////////////////////////////////////////////////////////////////////////////////////////
 #pragma mark - Initialization
 
-- (BOOL)alertControllerAvailable {
-    return [UIAlertController class] != nil; // iOS 8 and later.
-}
-
 + (instancetype)alertControllerWithTitle:(NSString *)title message:(NSString *)message preferredStyle:(PSTAlertControllerStyle)preferredStyle {
     return [[self alloc] initWithTitle:title message:message preferredStyle:preferredStyle];
 }
@@ -110,9 +106,7 @@
         _message = [message copy];
         _preferredStyle = preferredStyle;
 
-        if ([self alertControllerAvailable]) {
-            _alertController = [PSTExtendedAlertController alertControllerWithTitle:title message:message preferredStyle:(UIAlertControllerStyle)preferredStyle];
-        }
+        _alertController = [PSTExtendedAlertController alertControllerWithTitle:title message:message preferredStyle:(UIAlertControllerStyle)preferredStyle];
     }
     return self;
 }
@@ -163,31 +157,23 @@
 
     self.actions = [[NSArray arrayWithArray:self.actions] arrayByAddingObject:action];
 
-    if ([self alertControllerAvailable]) {
-        __weak typeof (self) weakSelf = self;
-        UIAlertAction *alertAction = [UIAlertAction actionWithTitle:action.title style:(UIAlertActionStyle)action.style handler:^(UIAlertAction *uiAction) {
-            weakSelf.executedAlertAction = action;
-            [action performAction];
-        }];
-        [self.alertController addAction:alertAction];
-    }
+    __weak typeof (self) weakSelf = self;
+    UIAlertAction *alertAction = [UIAlertAction actionWithTitle:action.title style:(UIAlertActionStyle)action.style handler:^(UIAlertAction *uiAction) {
+        weakSelf.executedAlertAction = action;
+        [action performAction];
+    }];
+    [self.alertController addAction:alertAction];
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////
 #pragma mark - Text Field Support
 
 - (void)addTextFieldWithConfigurationHandler:(void (^)(UITextField *textField))configurationHandler {
-    if ([self alertControllerAvailable]) {
-        [self.alertController addTextFieldWithConfigurationHandler:configurationHandler];
-    }
+    [self.alertController addTextFieldWithConfigurationHandler:configurationHandler];
 }
 
 - (NSArray *)textFields {
-    if ([self alertControllerAvailable]) {
-        return self.alertController.textFields;
-    }
-    // UIActionSheet doesn't support text fields.
-    return nil;
+    return self.alertController.textFields;
 }
 
 - (UITextField *)textField {
@@ -211,87 +197,85 @@ static NSUInteger PSTVisibleAlertsCount = 0;
 }
 
 - (void)showWithSender:(id)sender arrowDirection:(UIPopoverArrowDirection)arrowDirection controller:(UIViewController *)controller animated:(BOOL)animated completion:(void (^)(void))completion {
-    if ([self alertControllerAvailable]) {
-        // As a convenience, allow automatic root view controller fetching if we show an alert.
-        if (self.preferredStyle == PSTAlertControllerStyleAlert) {
-            if (!controller) {
-                // sharedApplication is unavailable for extensions, but required for things like preferredContentSizeCategory.
-                UIApplication *sharedApplication = [UIApplication performSelector:NSSelectorFromString(PROPERTY(sharedApplication))];
-                controller = sharedApplication.keyWindow.rootViewController;
-            }
-
-            // Use the frontmost viewController for presentation.
-            while (controller.presentedViewController) {
-                controller = controller.presentedViewController;
-            }
-
-            if (!controller) {
-                NSLog(@"Can't show alert because there is no root view controller.");
-                return;
-            }
+    // As a convenience, allow automatic root view controller fetching if we show an alert.
+    if (self.preferredStyle == PSTAlertControllerStyleAlert) {
+        if (!controller) {
+            // sharedApplication is unavailable for extensions, but required for things like preferredContentSizeCategory.
+            UIApplication *sharedApplication = [UIApplication performSelector:NSSelectorFromString(PROPERTY(sharedApplication))];
+            controller = sharedApplication.keyWindow.rootViewController;
         }
 
-        // We absolutely need a controller going forward.
-        NSParameterAssert(controller);
-
-        PSTExtendedAlertController *alertController = self.alertController;
-        UIPopoverPresentationController *popoverPresentation = alertController.popoverPresentationController;
-        if (popoverPresentation) { // nil on iPhone
-            if ([sender isKindOfClass:UIBarButtonItem.class]) {
-                popoverPresentation.barButtonItem = sender;
-            } else if ([sender isKindOfClass:UIView.class]) {
-                popoverPresentation.sourceView = sender;
-                popoverPresentation.sourceRect = [sender bounds];
-            } else if ([sender isKindOfClass:NSValue.class]) {
-                popoverPresentation.sourceView = controller.view;
-                popoverPresentation.sourceRect = [sender CGRectValue];
-            } else {
-                popoverPresentation.sourceView = controller.view;
-                popoverPresentation.sourceRect = controller.view.bounds;
-            }
-
-            // Workaround for rdar://18921595. Unsatisfiable constraints when presenting UIAlertController.
-            // If the rect is too large, the action sheet can't be displayed.
-            CGRect r = popoverPresentation.sourceRect, screen = UIScreen.mainScreen.bounds;
-            if (CGRectGetHeight(r) > CGRectGetHeight(screen)*0.5 || CGRectGetWidth(r) > CGRectGetWidth(screen)*0.5) {
-                popoverPresentation.sourceRect = CGRectMake(r.origin.x + r.size.width/2.f, r.origin.y + r.size.height/2.f, 1.f, 1.f);
-            }
-
-            // optimize arrow positioning for up and down.
-            popoverPresentation.permittedArrowDirections = arrowDirection;
-            switch (arrowDirection) {
-                case UIPopoverArrowDirectionDown:
-                    popoverPresentation.sourceRect = CGRectMake(r.origin.x + r.size.width/2.f, r.origin.y, 1.f, 1.f);
-                    break;
-                case UIPopoverArrowDirectionUp:
-                    popoverPresentation.sourceRect = CGRectMake(r.origin.x + r.size.width/2.f, r.origin.y + r.size.height, 1.f, 1.f);
-                    break;
-                // Left and right is too buggy.
-                default:
-                    break;
-            }
+        // Use the frontmost viewController for presentation.
+        while (controller.presentedViewController) {
+            controller = controller.presentedViewController;
         }
 
-        // Hook up dismiss blocks.
-        __weak typeof (self) weakSelf = self;
-        alertController.viewWillDisappearBlock = ^{
-            typeof (self) strongSelf = weakSelf;
-            [strongSelf performBlocks:PROPERTY(willDismissBlocks) withAction:strongSelf.executedAlertAction];
-            [strongSelf setIsShowingAlert:NO];
-        };
-        alertController.viewDidDisappearBlock = ^{
-            typeof (self) strongSelf = weakSelf;
-            [strongSelf performBlocks:PROPERTY(didDismissBlocks) withAction:strongSelf.executedAlertAction];
-        };
-
-        [controller presentViewController:alertController animated:animated completion:^{
-            // Bild lifetime of self to the controller.
-            // Will not be called if presenting fails because another present/dismissal already happened during that runloop.
-            // rdar://problem/19045528
-            objc_setAssociatedObject(controller, _cmd, self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }];
-
+        if (!controller) {
+            NSLog(@"Can't show alert because there is no root view controller.");
+            return;
+        }
     }
+
+    // We absolutely need a controller going forward.
+    NSParameterAssert(controller);
+
+    PSTExtendedAlertController *alertController = self.alertController;
+    UIPopoverPresentationController *popoverPresentation = alertController.popoverPresentationController;
+    if (popoverPresentation) { // nil on iPhone
+        if ([sender isKindOfClass:UIBarButtonItem.class]) {
+            popoverPresentation.barButtonItem = sender;
+        } else if ([sender isKindOfClass:UIView.class]) {
+            popoverPresentation.sourceView = sender;
+            popoverPresentation.sourceRect = [sender bounds];
+        } else if ([sender isKindOfClass:NSValue.class]) {
+            popoverPresentation.sourceView = controller.view;
+            popoverPresentation.sourceRect = [sender CGRectValue];
+        } else {
+            popoverPresentation.sourceView = controller.view;
+            popoverPresentation.sourceRect = controller.view.bounds;
+        }
+
+        // Workaround for rdar://18921595. Unsatisfiable constraints when presenting UIAlertController.
+        // If the rect is too large, the action sheet can't be displayed.
+        CGRect r = popoverPresentation.sourceRect, screen = UIScreen.mainScreen.bounds;
+        if (CGRectGetHeight(r) > CGRectGetHeight(screen)*0.5 || CGRectGetWidth(r) > CGRectGetWidth(screen)*0.5) {
+            popoverPresentation.sourceRect = CGRectMake(r.origin.x + r.size.width/2.f, r.origin.y + r.size.height/2.f, 1.f, 1.f);
+        }
+
+        // optimize arrow positioning for up and down.
+        popoverPresentation.permittedArrowDirections = arrowDirection;
+        switch (arrowDirection) {
+            case UIPopoverArrowDirectionDown:
+                popoverPresentation.sourceRect = CGRectMake(r.origin.x + r.size.width/2.f, r.origin.y, 1.f, 1.f);
+                break;
+            case UIPopoverArrowDirectionUp:
+                popoverPresentation.sourceRect = CGRectMake(r.origin.x + r.size.width/2.f, r.origin.y + r.size.height, 1.f, 1.f);
+                break;
+                // Left and right is too buggy.
+            default:
+                break;
+        }
+    }
+
+    // Hook up dismiss blocks.
+    __weak typeof (self) weakSelf = self;
+    alertController.viewWillDisappearBlock = ^{
+        typeof (self) strongSelf = weakSelf;
+        [strongSelf performBlocks:PROPERTY(willDismissBlocks) withAction:strongSelf.executedAlertAction];
+        [strongSelf setIsShowingAlert:NO];
+    };
+    alertController.viewDidDisappearBlock = ^{
+        typeof (self) strongSelf = weakSelf;
+        [strongSelf performBlocks:PROPERTY(didDismissBlocks) withAction:strongSelf.executedAlertAction];
+    };
+
+    [controller presentViewController:alertController animated:animated completion:^{
+        // Bild lifetime of self to the controller.
+        // Will not be called if presenting fails because another present/dismissal already happened during that runloop.
+        // rdar://problem/19045528
+        objc_setAssociatedObject(controller, _cmd, self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }];
+
     [self setIsShowingAlert:YES];
 }
 
@@ -307,9 +291,7 @@ static NSUInteger PSTVisibleAlertsCount = 0;
 }
 
 - (void)dismissAnimated:(BOOL)animated completion:(void (^)(void))completion {
-    if ([self alertControllerAvailable]) {
-        [self.alertController dismissViewControllerAnimated:animated completion:completion];
-    }
+    [self.alertController dismissViewControllerAnimated:animated completion:completion];
 }
 
 - (id)presentedObject {
